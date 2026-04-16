@@ -488,11 +488,11 @@ def get_sheet_row(row_number: int) -> dict:
 
     row = rows[row_number - 1]   # 1-indexed → 0-indexed
 
-    # 列は 0-indexed: H=7, I=8, J=9, K=10
-    kikaku_ito        = row[7].strip()  if len(row) > 7  else ""
-    youtube_raw       = row[8].strip()  if len(row) > 8  else ""
-    samune_image      = row[9].strip()  if len(row) > 9  else ""
-    gas_transcripts   = row[10].strip() if len(row) > 10 else ""  # GASが書き込んだ文字起こし
+    # 列は 0-indexed: H=7, I=8, J=9（文字起こし）, K=10（サムネイメージ）
+    kikaku_ito      = row[7].strip()  if len(row) > 7  else ""
+    youtube_raw     = row[8].strip()  if len(row) > 8  else ""
+    gas_transcripts = row[9].strip()  if len(row) > 9  else ""  # J列: GASが書き込んだ文字起こし
+    samune_image    = row[10].strip() if len(row) > 10 else ""  # K列: サムネイメージ
 
     # I列から YouTube URL を抽出（複数 URL / 改行・カンマ区切りに対応）
     youtube_urls = re.findall(
