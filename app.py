@@ -537,7 +537,7 @@ def extract_score(text: str) -> int:
 def call_claude(messages: list, system: str = None) -> str:
     """Claude API を呼び出してテキストを返す。
     system を渡すと台本などのコンテキストをシステムプロンプトで渡せる。"""
-    kwargs = dict(model=MODEL, max_tokens=16000, messages=messages)
+    kwargs = dict(model=MODEL, max_tokens=8192, messages=messages)
     if system:
         kwargs["system"] = system
     try:
