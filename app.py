@@ -10,12 +10,6 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# PROXY_URL が設定されている場合、requests が自動的に使う環境変数に反映する
-# youtube-transcript-api も内部で requests を使うため、バージョン問わず有効
-_proxy = os.getenv("PROXY_URL")
-if _proxy:
-    os.environ.setdefault("HTTP_PROXY",  _proxy)
-    os.environ.setdefault("HTTPS_PROXY", _proxy)
 
 app = Flask(__name__)
 client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
