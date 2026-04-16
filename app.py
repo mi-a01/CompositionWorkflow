@@ -409,30 +409,25 @@ def extract_video_id(url: str) -> str:
 
 
 def get_youtube_transcript(url: str) -> str:
-    """YouTube動画の文字起こしを取得する。
-    TRANSCRIPT_API_URL が設定されていれば外部APIを使用（クラウドIPブロック回避）。
-    なければ youtube-transcript-api で直接取得（ローカル環境向け）。
-    """
+    """YouTube動画の文字起こしを取得する（ローカル直接取得）。"""
     video_id = extract_video_id(url)
 
-    # ── 方法①: 外部文字起こしAPI（TRANSCRIPT_API_URL が設定されている場合）──
-    transcript_api_url = os.getenv("TRANSCRIPT_API_URL")
-    if transcript_api_url:
-        api_endpoint = transcript_api_url.rstrip("/") + "/transcript"
-        try:
-            resp = requests.get(api_endpoint, params={"video_id": video_id}, timeout=60)
-            data = resp.json()
-            if resp.status_code == 200 and "transcript" in data:
-                return data["transcript"]
-            raise ValueError(data.get("error", f"API error: HTTP {resp.status_code}"))
-        except Exception as e:
-            raise ValueError(f"文字起こしAPI接続失敗 [{api_endpoint}]: {type(e).__name__}: {e}")
+    from youtube_transcript_api import YouTubeTranscriptApi
 
-    # ── 方法②: ローカル直接取得（TRANSCRIPT_API_URL 未設定時）──
-    raise ValueError(
-        "TRANSCRIPT_API_URL が設定されていません。"
-        "Renderの環境変数に TRANSCRIPT_API_URL を追加してください。"
-    )
+    api = YouTubeTranscriptApi()
+    try:
+        transcript_list = api.list(video_id)
+        target = None
+        for t in transcript_list:
+            if t.language_code.lower().startswith("ja"):
+                target = t
+                break
+        target = target or next(iter(transcript_list), None)
+        if target:
+            fetched = target.fetch()
+            return "\n".join(seg.text for seg in fetched)
+    except Exception as e:
+        raise ValueError(f"文字起こし取得失敗: {type(e).__name__}: {e}")
 
 
 def get_sheet_row(row_number: int) -> dict:
