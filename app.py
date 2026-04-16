@@ -418,8 +418,13 @@ def get_youtube_transcript(url: str) -> str:
 
     video_id = extract_video_id(url)
 
-    # v0.6.0+ はクラスをインスタンス化して使う
-    api = YouTubeTranscriptApi()
+    # クラウド環境ではYouTubeがIPをブロックするためプロキシ経由で取得する
+    # PROXY_URL 例: http://user:pass@proxy.webshare.io:80
+    proxy_url = os.getenv("PROXY_URL")
+    if proxy_url:
+        api = YouTubeTranscriptApi(proxies={"http": proxy_url, "https": proxy_url})
+    else:
+        api = YouTubeTranscriptApi()
 
     fetched = None
     for langs in (["ja", "ja-JP"], ["en"], None):
