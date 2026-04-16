@@ -415,8 +415,10 @@ def extract_video_id(url: str) -> str:
 
 
 def get_youtube_transcript(url: str) -> str:
-    """YouTube動画の文字起こしを取得する（日本語優先、なければ英語）
+    """YouTube動画の文字起こしを取得する（日本語優先、なければ何でも）
     youtube-transcript-api v0.6.0+ の新APIに対応。
+    言語コード指定方式ではなく list() で一覧取得してから選ぶ方式を使う。
+    クラウド環境での自動生成字幕取得失敗を回避できる。
     """
     try:
         from youtube_transcript_api import YouTubeTranscriptApi
@@ -424,29 +426,37 @@ def get_youtube_transcript(url: str) -> str:
         raise ImportError("youtube-transcript-api がインストールされていません。pip install youtube-transcript-api を実行してください。")
 
     video_id = extract_video_id(url)
-
-    # プロキシはアプリ起動時に HTTP_PROXY / HTTPS_PROXY へ反映済み（起動直後の設定参照）
     api = YouTubeTranscriptApi()
 
-    fetched = None
-    last_error = None
+    # ── 方法①: list() で一覧を取得して日本語優先で選ぶ ──
+    try:
+        transcript_list = api.list(video_id)
+        ja_transcript  = None
+        any_transcript = None
+        for t in transcript_list:
+            if any_transcript is None:
+                any_transcript = t
+            if t.language_code.lower().startswith("ja") and ja_transcript is None:
+                ja_transcript = t
+        target = ja_transcript or any_transcript
+        if target:
+            fetched = target.fetch()
+            return "\n".join(seg.text for seg in fetched)
+    except Exception as e:
+        list_error = f"[list方式] {type(e).__name__}: {e}"
+    else:
+        list_error = "[list方式] 字幕が1件も見つかりませんでした"
+
+    # ── 方法②: fetch() 直接呼び出し（フォールバック）──
+    last_error = list_error
     for langs in (["ja", "ja-JP"], ["en"], None):
         try:
-            if langs:
-                fetched = api.fetch(video_id, languages=langs)
-            else:
-                fetched = api.fetch(video_id)
-            break
+            fetched = api.fetch(video_id, languages=langs) if langs else api.fetch(video_id)
+            return "\n".join(seg.text for seg in fetched)
         except Exception as e:
-            last_error = e
-            continue
+            last_error = f"[fetch{langs}] {type(e).__name__}: {e}"
 
-    if fetched is None:
-        raise ValueError(
-            f"文字起こし取得失敗 [{type(last_error).__name__}]: {last_error} | 動画: {url}"
-        )
-
-    return "\n".join(seg.text for seg in fetched)
+    raise ValueError(f"文字起こし取得失敗（全方式失敗）: {last_error} | 動画: {url}")
 
 
 def get_sheet_row(row_number: int) -> dict:
