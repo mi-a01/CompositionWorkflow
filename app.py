@@ -10,6 +10,13 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# PROXY_URL が設定されている場合、requests が自動的に使う環境変数に反映する
+# youtube-transcript-api も内部で requests を使うため、バージョン問わず有効
+_proxy = os.getenv("PROXY_URL")
+if _proxy:
+    os.environ.setdefault("HTTP_PROXY",  _proxy)
+    os.environ.setdefault("HTTPS_PROXY", _proxy)
+
 app = Flask(__name__)
 client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 
@@ -418,13 +425,8 @@ def get_youtube_transcript(url: str) -> str:
 
     video_id = extract_video_id(url)
 
-    # クラウド環境ではYouTubeがIPをブロックするためプロキシ経由で取得する
-    # PROXY_URL 例: http://user:pass@proxy.webshare.io:80
-    proxy_url = os.getenv("PROXY_URL")
-    if proxy_url:
-        api = YouTubeTranscriptApi(proxies={"http": proxy_url, "https": proxy_url})
-    else:
-        api = YouTubeTranscriptApi()
+    # プロキシはアプリ起動時に HTTP_PROXY / HTTPS_PROXY へ反映済み（起動直後の設定参照）
+    api = YouTubeTranscriptApi()
 
     fetched = None
     for langs in (["ja", "ja-JP"], ["en"], None):
