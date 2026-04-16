@@ -714,8 +714,12 @@ def run_workflow():
                                "label": f"文字起こし：{url}",
                                "content": transcript})
                 except Exception as e:
-                    err_msg = f"（文字起こし取得失敗: {e}）"
-                    transcripts.append(f"【{url}】\n{err_msg}")
+                    err_msg = (
+                        f"⚠️ 文字起こしを取得できませんでした（クラウド環境ではYouTubeのIP制限により取得できない場合があります）。\n"
+                        f"このままワークフローを続行します。\n"
+                        f"詳細: {e}"
+                    )
+                    transcripts.append(f"【{url}】\n（文字起こし取得失敗のため省略）")
                     yield sse({"type": "message", "role": "assistant",
                                "label": f"文字起こし取得エラー：{url}",
                                "content": err_msg})
