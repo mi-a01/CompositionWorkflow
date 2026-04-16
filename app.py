@@ -429,6 +429,7 @@ def get_youtube_transcript(url: str) -> str:
     api = YouTubeTranscriptApi()
 
     fetched = None
+    last_error = None
     for langs in (["ja", "ja-JP"], ["en"], None):
         try:
             if langs:
@@ -436,11 +437,14 @@ def get_youtube_transcript(url: str) -> str:
             else:
                 fetched = api.fetch(video_id)
             break
-        except Exception:
+        except Exception as e:
+            last_error = e
             continue
 
     if fetched is None:
-        raise ValueError(f"この動画の文字起こしを取得できませんでした（字幕が無効か非公開の可能性があります）: {url}")
+        raise ValueError(
+            f"文字起こし取得失敗 [{type(last_error).__name__}]: {last_error} | 動画: {url}"
+        )
 
     return "\n".join(seg.text for seg in fetched)
 
