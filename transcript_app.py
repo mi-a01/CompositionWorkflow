@@ -61,6 +61,11 @@ def get_transcript():
         return jsonify({"error": f"{type(e).__name__}: {e}"}), 500
 
 
+@app.route('/')
+def index():
+    return jsonify({"status": "ok", "service": "transcript-api"})
+
+
 @app.route('/health')
 def health():
     return jsonify({"status": "ok"})
