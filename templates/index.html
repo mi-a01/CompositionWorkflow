@@ -1,0 +1,680 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>構成書ワークフロー</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: "Hiragino Kaku Gothic ProN", "Meiryo", sans-serif;
+      background: #0f172a;
+      color: #e2e8f0;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ── Header ── */
+    header {
+      background: #1e293b;
+      border-bottom: 1px solid #334155;
+      padding: 14px 24px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    header h1 { font-size: 17px; font-weight: 700; color: #f1f5f9; }
+    .badge { font-size: 11px; padding: 2px 8px; border-radius: 99px; }
+    .badge-blue  { background: #1d4ed8; color: #bfdbfe; }
+    .badge-green { background: #166534; color: #86efac; }
+    .header-right { margin-left: auto; font-size: 11px; color: #64748b; }
+
+    /* ── Score bar ── */
+    #score-bar {
+      display: none;
+      background: #1e293b;
+      border-bottom: 1px solid #334155;
+      padding: 8px 24px;
+      align-items: center;
+      gap: 12px;
+    }
+    #score-bar.visible { display: flex; }
+    #score-label { font-size: 12px; color: #94a3b8; min-width: 90px; }
+    #score-track { flex: 1; height: 8px; background: #334155; border-radius: 4px; overflow: hidden; }
+    #score-fill {
+      height: 100%; width: 0%;
+      background: #ef4444; border-radius: 4px;
+      transition: width 0.5s ease, background 0.5s ease;
+    }
+    #score-fill.pass { background: #22c55e; }
+    #score-num { font-size: 14px; font-weight: 700; min-width: 55px; text-align: right; }
+
+    /* ── Main ── */
+    main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+
+    #chat {
+      flex: 1; overflow-y: auto;
+      padding: 20px 24px;
+      display: flex; flex-direction: column; gap: 14px;
+    }
+
+    .empty-hint {
+      color: #475569; font-size: 13px; text-align: center;
+      padding: 40px 0; line-height: 2;
+    }
+
+    /* ── Step indicator ── */
+    .step-indicator {
+      display: flex; align-items: center; gap: 8px;
+      color: #64748b; font-size: 12px;
+    }
+    .step-indicator::before, .step-indicator::after {
+      content: ""; flex: 1; height: 1px; background: #1e293b;
+    }
+    .step-dot {
+      display: flex; align-items: center; gap: 6px;
+      padding: 4px 12px; border-radius: 99px;
+      border: 1px solid #334155; background: #1e293b;
+      white-space: nowrap;
+    }
+    .spinner {
+      width: 12px; height: 12px;
+      border: 2px solid #334155; border-top-color: #3b82f6;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── Typing indicator（処理中に表示するクルクル）── */
+    #typing-indicator {
+      display: none;
+      align-self: flex-start;
+    }
+    #typing-indicator.visible { display: flex; }
+    .typing-bubble {
+      display: flex; align-items: center; gap: 5px;
+      background: #1e293b; border: 1px solid #334155;
+      padding: 10px 16px; border-radius: 12px; border-bottom-left-radius: 4px;
+    }
+    .typing-bubble span {
+      width: 7px; height: 7px; border-radius: 50%;
+      background: #3b82f6;
+      animation: blink 1.2s infinite ease-in-out;
+    }
+    .typing-bubble span:nth-child(2) { animation-delay: 0.2s; }
+    .typing-bubble span:nth-child(3) { animation-delay: 0.4s; }
+    @keyframes blink {
+      0%, 80%, 100% { opacity: 0.25; transform: scale(0.9); }
+      40%           { opacity: 1;    transform: scale(1.15); }
+    }
+
+    /* ── Message bubble ── */
+    .msg { display: flex; flex-direction: column; gap: 5px; max-width: 85%; }
+    .msg.user      { align-self: flex-end; align-items: flex-end; }
+    .msg.assistant { align-self: flex-start; align-items: flex-start; }
+
+    .msg-header {
+      display: flex; align-items: center; gap: 6px; padding: 0 2px;
+    }
+    .msg.user .msg-header { flex-direction: row-reverse; }
+
+    .msg-label { font-size: 11px; color: #64748b; }
+    .msg.user .msg-label { color: #93c5fd; }
+
+    .copy-btn {
+      display: flex; align-items: center; gap: 4px;
+      background: #0f172a;
+      border: 1px solid #334155; border-radius: 5px;
+      color: #64748b; cursor: pointer;
+      padding: 2px 8px; font-size: 11px; font-family: inherit;
+      transition: background 0.12s, color 0.12s, border-color 0.12s;
+      white-space: nowrap;
+    }
+    .copy-btn:hover { background: #334155; color: #e2e8f0; }
+    .copy-btn.copied { border-color: #22c55e; color: #22c55e; background: #052e16; }
+
+    .bubble {
+      padding: 11px 15px; border-radius: 12px;
+      font-size: 13px; line-height: 1.75;
+      white-space: pre-wrap; word-break: break-word;
+      max-height: 320px; overflow-y: auto;
+    }
+    .msg.user .bubble {
+      background: #1d4ed8; color: #eff6ff;
+      border-bottom-right-radius: 4px;
+    }
+    .msg.assistant .bubble {
+      background: #1e293b; color: #e2e8f0;
+      border: 1px solid #334155; border-bottom-left-radius: 4px;
+    }
+
+    /* ── Banners ── */
+    .complete-banner {
+      padding: 16px 20px; border-radius: 12px;
+      font-size: 14px; font-weight: 600; border: 1px solid;
+      white-space: pre-wrap; line-height: 1.8;
+    }
+    .complete-banner.success       { background: #14532d; border-color: #22c55e; color: #86efac; text-align: center; }
+    .complete-banner.appeal-success{ background: #1e1b4b; border-color: #818cf8; color: #c7d2fe; text-align: center; }
+    .complete-banner.fail          { background: #431407; border-color: #f97316; color: #fdba74; }
+
+    /* ── Action panel（human_needed 時に表示）── */
+    .action-panel {
+      background: #1e1b4b;
+      border: 1px solid #818cf8;
+      border-radius: 14px;
+      padding: 20px 22px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+    .action-score {
+      font-size: 22px; font-weight: 800; color: #a5b4fc;
+    }
+    .action-guide {
+      font-size: 13px; color: #c7d2fe; line-height: 1.7;
+    }
+    .action-btns {
+      display: flex; gap: 10px; flex-wrap: wrap;
+    }
+    .btn-repeat {
+      background: #1d4ed8; color: #fff;
+      border: none; border-radius: 9px;
+      padding: 11px 20px; font-size: 13px; font-weight: 600;
+      cursor: pointer; transition: background 0.15s;
+      display: flex; align-items: center; gap: 6px;
+    }
+    .btn-repeat:hover { background: #1e40af; }
+    .btn-manual {
+      background: #0f766e; color: #fff;
+      border: none; border-radius: 9px;
+      padding: 11px 20px; font-size: 13px; font-weight: 600;
+      cursor: pointer; transition: background 0.15s;
+      display: flex; align-items: center; gap: 6px;
+    }
+    .btn-manual:hover { background: #0d6b64; }
+    .btn-paste {
+      background: #7c3aed; color: #fff;
+      border: none; border-radius: 9px;
+      padding: 11px 20px; font-size: 13px; font-weight: 600;
+      cursor: pointer; transition: background 0.15s;
+      display: flex; align-items: center; gap: 6px;
+    }
+    .btn-paste:hover { background: #6d28d9; }
+
+    /* 手動修正・貼り付けエリア（共通） */
+    .input-area-panel {
+      display: none;
+      flex-direction: column;
+      gap: 10px;
+      border-top: 1px solid #334155;
+      padding-top: 14px;
+      margin-top: 4px;
+    }
+    .input-area-panel.visible { display: flex; }
+    .panel-label { font-size: 12px; color: #94a3b8; }
+    .panel-textarea {
+      background: #0f172a;
+      border: 1px solid #4f46e5;
+      border-radius: 8px;
+      color: #e2e8f0;
+      font-family: inherit;
+      font-size: 13px;
+      line-height: 1.6;
+      padding: 10px 12px;
+      resize: vertical;
+      min-height: 100px;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+    .panel-textarea:focus { border-color: #818cf8; }
+    .panel-textarea::placeholder { color: #475569; }
+    .btn-submit {
+      align-self: flex-end;
+      background: #7c3aed; color: #fff;
+      border: none; border-radius: 8px;
+      padding: 10px 22px; font-size: 13px; font-weight: 600;
+      cursor: pointer; transition: background 0.15s;
+    }
+    .btn-submit:hover { background: #6d28d9; }
+    .btn-submit-green {
+      align-self: flex-end;
+      background: #059669; color: #fff;
+      border: none; border-radius: 8px;
+      padding: 10px 22px; font-size: 13px; font-weight: 600;
+      cursor: pointer; transition: background 0.15s;
+    }
+    .btn-submit-green:hover { background: #047857; }
+
+    /* ── Bottom input area ── */
+    #input-area {
+      background: #1e293b;
+      border-top: 1px solid #334155;
+      padding: 14px 24px;
+      display: flex; gap: 12px; align-items: center;
+    }
+    .row-label { font-size: 13px; color: #94a3b8; white-space: nowrap; }
+    #row-input {
+      width: 90px;
+      background: #0f172a;
+      border: 1px solid #334155; border-radius: 8px;
+      color: #e2e8f0; font-size: 16px; font-weight: 600;
+      padding: 10px 12px; outline: none; text-align: center;
+      transition: border-color 0.15s;
+      -moz-appearance: textfield;
+    }
+    #row-input::-webkit-inner-spin-button,
+    #row-input::-webkit-outer-spin-button { -webkit-appearance: none; }
+    #row-input:focus { border-color: #3b82f6; }
+    #row-input::placeholder { color: #475569; font-size: 13px; font-weight: 400; }
+    .row-hint { font-size: 12px; color: #475569; flex: 1; }
+    #run-btn {
+      background: #2563eb; color: #fff;
+      border: none; border-radius: 10px;
+      padding: 12px 24px; font-size: 14px; font-weight: 600;
+      cursor: pointer; transition: background 0.15s, opacity 0.15s;
+      white-space: nowrap;
+    }
+    #run-btn:hover:not(:disabled) { background: #1d4ed8; }
+    #run-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+    ::-webkit-scrollbar { width: 5px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>構成書ワークフロー</h1>
+  <span class="badge badge-blue">自動ループ評価</span>
+  <span class="badge badge-green">Claude Opus 4.6</span>
+  <span class="header-right">設計書生成 → 台本生成 → 評価 → 修正（最大5回）→ 75点以上で訴求挿入 → 完了</span>
+</header>
+
+<div id="score-bar">
+  <span id="score-label">最新スコア</span>
+  <div id="score-track"><div id="score-fill"></div></div>
+  <span id="score-num">-</span>
+</div>
+
+<main>
+  <div id="chat">
+    <div class="empty-hint">
+      スプレッドシートの行番号を入力して「開始」を押してください。<br>
+      H列（企画意図）・I列（YouTube URL）・J列（サムネイメージ）を自動取得し、<br>
+      設計書 → 台本 → 評価 → 修正（最大5回）→ 75点以上で訴求挿入して完成します。
+    </div>
+    <!-- 処理中クルクルインジケーター -->
+    <div id="typing-indicator">
+      <div class="typing-bubble">
+        <span></span><span></span><span></span>
+      </div>
+    </div>
+  </div>
+
+  <div id="input-area">
+    <span class="row-label">行番号</span>
+    <input type="number" id="row-input" min="1" placeholder="例: 2" />
+    <span class="row-hint">スプレッドシートの何行目を使いますか？</span>
+    <button id="run-btn" onclick="startWorkflow()">開始</button>
+  </div>
+</main>
+
+<script>
+  const chat          = document.getElementById("chat");
+  const typingIndicator = document.getElementById("typing-indicator");
+  const rowInput      = document.getElementById("row-input");
+  const runBtn        = document.getElementById("run-btn");
+  const scoreBar      = document.getElementById("score-bar");
+  const scoreFill     = document.getElementById("score-fill");
+  const scoreNum      = document.getElementById("score-num");
+
+  let currentStep   = null;
+  let currentScript = "";   // human_needed / complete 時に最新台本を保持
+
+  rowInput.addEventListener("keydown", e => { if (e.key === "Enter") startWorkflow(); });
+
+  /* ────────── UI ヘルパー ────────── */
+
+  function showTyping() {
+    chat.appendChild(typingIndicator);   // 常に末尾へ移動
+    typingIndicator.classList.add("visible");
+    scrollBottom();
+  }
+
+  function hideTyping() {
+    typingIndicator.classList.remove("visible");
+  }
+
+  function addStep(label, message) {
+    hideTyping();
+    const el = document.createElement("div");
+    el.className = "step-indicator";
+    el.innerHTML = `<div class="step-dot"><div class="spinner"></div>${label}：${message}</div>`;
+    chat.appendChild(el);
+    showTyping();   // step の後ろにクルクルを表示
+    scrollBottom();
+    return el;
+  }
+
+  function removeSpinner(el) {
+    const s = el && el.querySelector(".spinner");
+    if (s) s.remove();
+  }
+
+  function addMessage(role, label, content) {
+    hideTyping();
+
+    const wrapper = document.createElement("div");
+    wrapper.className = `msg ${role}`;
+
+    const header = document.createElement("div");
+    header.className = "msg-header";
+
+    const lbl = document.createElement("div");
+    lbl.className = "msg-label";
+    lbl.textContent = label;
+
+    const copyBtn = document.createElement("button");
+    copyBtn.className = "copy-btn";
+    copyBtn.innerHTML = `
+      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+      </svg>
+      コピー`;
+    copyBtn.title = "クリップボードにコピー";
+    copyBtn.onclick = () => {
+      navigator.clipboard.writeText(content).then(() => {
+        copyBtn.innerHTML = `
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <polyline points="20 6 9 17 4 12"/>
+          </svg>
+          コピー済み`;
+        copyBtn.classList.add("copied");
+        setTimeout(() => {
+          copyBtn.innerHTML = `
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+            </svg>
+            コピー`;
+          copyBtn.classList.remove("copied");
+        }, 2000);
+      }).catch(() => {
+        const ta = document.createElement("textarea");
+        ta.value = content;
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand("copy");
+        document.body.removeChild(ta);
+        copyBtn.textContent = "✓ コピー済み";
+        copyBtn.classList.add("copied");
+        setTimeout(() => {
+          copyBtn.innerHTML = `
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+            </svg>
+            コピー`;
+          copyBtn.classList.remove("copied");
+        }, 2000);
+      });
+    };
+
+    if (role === "user") {
+      header.appendChild(copyBtn);
+      header.appendChild(lbl);
+    } else {
+      header.appendChild(lbl);
+      header.appendChild(copyBtn);
+    }
+
+    const bubble = document.createElement("div");
+    bubble.className = "bubble";
+    bubble.textContent = content;
+
+    wrapper.appendChild(header);
+    wrapper.appendChild(bubble);
+    chat.appendChild(wrapper);
+
+    // クルクルを末尾に戻す（まだ処理中なら）
+    if (typingIndicator.classList.contains("visible")) {
+      chat.appendChild(typingIndicator);
+    }
+    scrollBottom();
+  }
+
+  function addBanner(type, message) {
+    hideTyping();
+    const el = document.createElement("div");
+    el.className = `complete-banner ${type}`;
+    el.textContent = message;
+    chat.appendChild(el);
+    scrollBottom();
+  }
+
+  function updateScore(score) {
+    scoreBar.classList.add("visible");
+    scoreNum.textContent = `${score}点`;
+    scoreFill.style.width = Math.min(score, 100) + "%";
+    score >= 75 ? scoreFill.classList.add("pass") : scoreFill.classList.remove("pass");
+  }
+
+  function scrollBottom() { chat.scrollTop = chat.scrollHeight; }
+  function clearChat()    { chat.innerHTML = ""; chat.appendChild(typingIndicator); }
+
+  /* ────────── アクションパネル（human_needed 時）────────── */
+
+  function addActionPanel(score, message) {
+    hideTyping();
+    const old = document.getElementById("action-panel");
+    if (old) old.remove();
+
+    const panel = document.createElement("div");
+    panel.id = "action-panel";
+    panel.className = "action-panel";
+    panel.innerHTML = `
+      <div class="action-score">現在 ${score}点 ／ 目標75点</div>
+      <div class="action-guide">${message}</div>
+
+      <div class="action-btns">
+        <button class="btn-repeat" onclick="doRepeat()">
+          🔄 さらに5回繰り返す
+        </button>
+        <button class="btn-manual" onclick="showManualInput()">
+          ✏️ 自分で修正点を指摘する
+        </button>
+        <button class="btn-paste" onclick="showPasteInput()">
+          📋 完成台本を貼り付けて訴求を挿入する
+        </button>
+      </div>
+
+      <!-- 手動修正エリア -->
+      <div class="input-area-panel" id="manual-area">
+        <div class="panel-label">修正してほしい点を入力してください（AIに伝わる具体的な指示を書くと効果的です）</div>
+        <textarea
+          class="panel-textarea"
+          id="manual-textarea"
+          placeholder="例）冒頭の「見ないリスク」が弱い。最初の30秒で視聴者が損をするイメージを持てるよう、具体的な数字や失敗例を追加してください。また中盤の実演パートで手順が飛んでいる箇所を補完してください。"
+        ></textarea>
+        <button class="btn-submit" onclick="submitManual()">この指示で台本を修正して評価する</button>
+      </div>
+
+      <!-- 貼り付けエリア -->
+      <div class="input-area-panel" id="paste-area">
+        <div class="panel-label">外部で修正した75点以上の台本全文を貼り付けてください</div>
+        <textarea
+          class="panel-textarea"
+          id="paste-textarea"
+          style="min-height: 160px;"
+          placeholder="台本全文をここに貼り付けてください..."
+        ></textarea>
+        <button class="btn-submit-green" onclick="submitPaste()">訴求を挿入して完成させる</button>
+      </div>
+    `;
+    chat.appendChild(panel);
+    scrollBottom();
+  }
+
+  function showManualInput() {
+    document.getElementById("paste-area").classList.remove("visible");
+    const area = document.getElementById("manual-area");
+    if (area) { area.classList.add("visible"); document.getElementById("manual-textarea").focus(); scrollBottom(); }
+  }
+
+  function showPasteInput() {
+    document.getElementById("manual-area").classList.remove("visible");
+    const area = document.getElementById("paste-area");
+    if (area) { area.classList.add("visible"); document.getElementById("paste-textarea").focus(); scrollBottom(); }
+  }
+
+  function doRepeat() {
+    const panel = document.getElementById("action-panel");
+    if (panel) panel.remove();
+    callContinue("repeat", currentScript, "");
+  }
+
+  function submitManual() {
+    const instructions = (document.getElementById("manual-textarea").value || "").trim();
+    if (!instructions) {
+      document.getElementById("manual-textarea").style.borderColor = "#ef4444";
+      setTimeout(() => document.getElementById("manual-textarea").style.borderColor = "", 1200);
+      return;
+    }
+    const panel = document.getElementById("action-panel");
+    if (panel) panel.remove();
+    addMessage("user", "手動修正指示（ユーザー入力）", instructions);
+    callContinue("manual", currentScript, instructions);
+  }
+
+  function submitPaste() {
+    const pastedScript = (document.getElementById("paste-textarea").value || "").trim();
+    if (!pastedScript) {
+      document.getElementById("paste-textarea").style.borderColor = "#ef4444";
+      setTimeout(() => document.getElementById("paste-textarea").style.borderColor = "", 1200);
+      return;
+    }
+    const panel = document.getElementById("action-panel");
+    if (panel) panel.remove();
+    addMessage("user", "貼り付け台本（ユーザー入力）", pastedScript.substring(0, 200) + (pastedScript.length > 200 ? "…" : ""));
+    callAppeal(pastedScript);
+  }
+
+  /* ────────── SSE 共通処理 ────────── */
+
+  function handleSSEEvent(ev) {
+    if (ev.type === "step") {
+      if (currentStep) removeSpinner(currentStep);
+      currentStep = addStep(ev.label, ev.message);
+
+    } else if (ev.type === "message") {
+      if (currentStep) { removeSpinner(currentStep); currentStep = null; }
+      addMessage(ev.role, ev.label, ev.content);
+
+    } else if (ev.type === "score") {
+      updateScore(ev.score);
+
+    } else if (ev.type === "complete") {
+      // 75点達成 → バナー表示後に自動で訴求挿入へ
+      if (currentStep) { removeSpinner(currentStep); currentStep = null; }
+      currentScript = ev.final_script;
+      addBanner("success", ev.message + "\n\n訴求の挿入を開始しています...");
+      // runBtn は appeal_complete まで disabled のまま
+      callAppeal(ev.final_script);
+
+    } else if (ev.type === "appeal_complete") {
+      if (currentStep) { removeSpinner(currentStep); currentStep = null; }
+      hideTyping();
+      addBanner("appeal-success", ev.message);
+      runBtn.disabled = false;
+
+    } else if (ev.type === "human_needed") {
+      if (currentStep) { removeSpinner(currentStep); currentStep = null; }
+      currentScript = ev.final_script;
+      addActionPanel(ev.score, ev.message);
+      runBtn.disabled = false;
+
+    } else if (ev.type === "error") {
+      if (currentStep) { removeSpinner(currentStep); currentStep = null; }
+      hideTyping();
+      addBanner("fail", "エラー: " + ev.message);
+      runBtn.disabled = false;
+    }
+  }
+
+  async function readSSEStream(resp) {
+    const reader  = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = "";
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      const lines = buf.split("\n\n");
+      buf = lines.pop();
+      for (const line of lines) {
+        if (!line.startsWith("data: ")) continue;
+        let ev;
+        try { ev = JSON.parse(line.slice(6)); } catch { continue; }
+        handleSSEEvent(ev);
+      }
+    }
+    // ストリーム終了のフォールバック（エラー等で終了した場合）
+    hideTyping();
+  }
+
+  /* ────────── エントリーポイント ────────── */
+
+  async function startWorkflow() {
+    const rowNum = parseInt(rowInput.value, 10);
+    if (!rowNum || rowNum < 1) {
+      rowInput.style.borderColor = "#ef4444";
+      setTimeout(() => rowInput.style.borderColor = "", 1200);
+      return;
+    }
+
+    clearChat();
+    currentScript = "";
+    currentStep   = null;
+    runBtn.disabled = true;
+    scoreBar.classList.remove("visible");
+    scoreFill.style.width = "0%";
+    scoreFill.classList.remove("pass");
+
+    const resp = await fetch("/api/workflow", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ row_number: rowNum }),
+    });
+    await readSSEStream(resp);
+  }
+
+  async function callContinue(action, script, userInstructions) {
+    currentStep   = null;
+    runBtn.disabled = true;
+
+    const resp = await fetch("/api/continue", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action, script, user_instructions: userInstructions }),
+    });
+    await readSSEStream(resp);
+  }
+
+  async function callAppeal(script) {
+    currentStep = null;
+    runBtn.disabled = true;
+
+    const resp = await fetch("/api/appeal", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ script }),
+    });
+    await readSSEStream(resp);
+  }
+</script>
+</body>
+</html>

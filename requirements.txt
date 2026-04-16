@@ -1,0 +1,7 @@
+flask
+anthropic
+python-dotenv
+requests
+youtube-transcript-api
+gunicorn
+gevent
