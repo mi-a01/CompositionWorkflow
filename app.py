@@ -3,6 +3,8 @@ import io
 import csv
 import json
 import re
+import uuid
+import threading
 import requests
 from flask import Flask, render_template, request, Response, stream_with_context
 import anthropic
@@ -13,6 +15,22 @@ load_dotenv()
 
 app = Flask(__name__)
 client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+
+# ===== 処理停止フラグ管理 =====
+_stop_flags: dict[str, threading.Event] = {}
+
+def new_job() -> tuple[str, threading.Event]:
+    """新しいジョブIDと停止フラグを生成して登録する"""
+    job_id = str(uuid.uuid4())
+    event = threading.Event()
+    _stop_flags[job_id] = event
+    return job_id, event
+
+def cleanup_job(job_id: str):
+    _stop_flags.pop(job_id, None)
+
+def is_stopped(event: threading.Event) -> bool:
+    return event.is_set()
 
 # ===== 設定 =====
 MODEL          = "claude-opus-4-6"
@@ -522,8 +540,20 @@ def call_claude(messages: list, system: str = None) -> str:
     kwargs = dict(model=MODEL, max_tokens=16000, messages=messages)
     if system:
         kwargs["system"] = system
-    response = client.messages.create(**kwargs)
-    return response.content[0].text
+    try:
+        response = client.messages.create(**kwargs)
+        return response.content[0].text
+    except anthropic.BadRequestError as e:
+        raise
+    except Exception as e:
+        err_str = str(e)
+        if "credit" in err_str.lower() or "billing" in err_str.lower() or "balance" in err_str.lower() or "402" in err_str:
+            raise RuntimeError(
+                "クレジット残高が不足しています。\n"
+                "以下のURLから残高を確認・チャージしてください：\n"
+                "https://platform.claude.com/settings/billing"
+            ) from e
+        raise
 
 
 def send_chatwork(message: str) -> None:
@@ -552,23 +582,19 @@ def human_needed_msg(score: int) -> str:
     )
 
 
-def eval_revise_loop(script: str, context_label: str = ""):
+def eval_revise_loop(script: str, context_label: str = "", stop_event: threading.Event = None):
     """
     評価 → 修正 を最大 MAX_ITERATIONS 回繰り返すジェネレータ。
-    SSE イベントを yield しながら、最終的に
-      {"type": "complete", ...} または {"type": "human_needed", ...} を yield する。
-
-    毎回の呼び出しは独立した固定サイズのメッセージリストを使用する。
-    ・評価: [台本(user), 確認(assistant), 評価プロンプト(user)]          → 3メッセージ固定
-    ・修正: [台本(user), 確認(assistant), 評価プロンプト(user),
-             評価結果(assistant), 修正プロンプト(user)]                  → 5メッセージ固定
-    履歴を積み上げないのでイテレーションが増えてもトークン消費量が変わらない。
-
-    context_label: ラベルに付与する追記文字列（例: "（継続）"）
+    stop_event がセットされたら処理を中断して stopped イベントを yield する。
     """
     for i in range(1, MAX_ITERATIONS + 1):
 
-        # ── 評価（台本を先頭メッセージで渡し、評価プロンプトのみ最後に投げる）──
+        # ── 停止チェック ──
+        if stop_event and stop_event.is_set():
+            yield sse({"type": "stopped", "message": "処理を停止しました。", "final_script": script})
+            return
+
+        # ── 評価 ──
         label_e = f"評価 第{i}回{context_label}"
         yield sse({"type": "step", "step": 3, "label": label_e,
                    "message": f"台本を評価しています（{label_e}）..."})
@@ -576,12 +602,8 @@ def eval_revise_loop(script: str, context_label: str = ""):
         yield sse({"type": "message", "role": "user",
                    "label": f"評価プロンプト（自動・{label_e}）", "content": EVALUATION_PROMPT})
 
-        # 台本をシステムプロンプトで渡し、評価プロンプトのみ user として投げる
-        eval_messages = [
-            {"role": "user", "content": EVALUATION_PROMPT},
-        ]
         evaluation = call_claude(
-            eval_messages,
+            [{"role": "user", "content": EVALUATION_PROMPT}],
             system=f"以下の台本が評価・修正の対象です。\n\n{script}",
         )
         yield sse({"type": "message", "role": "assistant",
@@ -609,11 +631,16 @@ def eval_revise_loop(script: str, context_label: str = ""):
                 f"[info][title]⚠️ 台本ワークフロー：人間の確認が必要です[/title]"
                 f"スコア：{score}点（目標：{PASS_SCORE}点以上）\n\n"
                 f"評価・修正を{MAX_ITERATIONS}回繰り返しましたが、目標スコアに達しませんでした。\n"
-                f"アプリで「さらに4回繰り返す」または「修正点を自分で指摘」を選択してください。[/info]"
+                f"アプリで「さらに5回繰り返す」または「修正点を自分で指摘」を選択してください。[/info]"
             )
             return
 
-        # ── 修正（台本＋評価結果を渡し、修正プロンプトのみ最後に投げる）──
+        # ── 停止チェック（修正前）──
+        if stop_event and stop_event.is_set():
+            yield sse({"type": "stopped", "message": "処理を停止しました。", "final_script": script})
+            return
+
+        # ── 修正 ──
         label_r = f"修正 第{i}回{context_label}"
         yield sse({"type": "step", "step": 4, "label": label_r,
                    "message": f"台本を修正しています（{label_r}）..."})
@@ -621,7 +648,6 @@ def eval_revise_loop(script: str, context_label: str = ""):
         yield sse({"type": "message", "role": "user",
                    "label": f"修正プロンプト（自動・{label_r}）", "content": REVISION_PROMPT})
 
-        # 台本をシステムプロンプトで渡し、評価→修正の流れをメッセージで表現
         revision_messages = [
             {"role": "user",      "content": EVALUATION_PROMPT},
             {"role": "assistant", "content": evaluation},
@@ -642,6 +668,15 @@ def index():
     return render_template("index.html")
 
 
+@app.route("/api/stop", methods=["POST"])
+def stop_workflow():
+    job_id = (request.get_json() or {}).get("job_id")
+    if job_id and job_id in _stop_flags:
+        _stop_flags[job_id].set()
+        return {"ok": True}
+    return {"ok": False}, 404
+
+
 @app.route("/api/workflow", methods=["POST"])
 def run_workflow():
     data = request.get_json()
@@ -650,8 +685,11 @@ def run_workflow():
     if not row_number or not isinstance(row_number, int) or row_number < 1:
         return {"error": "有効な行番号を指定してください"}, 400
 
+    job_id, stop_event = new_job()
+
     def generate():
         try:
+            yield sse({"type": "job_id", "job_id": job_id})
             # ────────────────────────────────────────────
             # Step 0: スプレッドシートからデータ取得
             # ────────────────────────────────────────────
@@ -727,10 +765,12 @@ def run_workflow():
             # ────────────────────────────────────────────
             # Step 3+: 評価 → 修正ループ（共通関数に委譲）
             # ────────────────────────────────────────────
-            yield from eval_revise_loop(script)
+            yield from eval_revise_loop(script, stop_event=stop_event)
 
         except Exception as e:
             yield sse({"type": "error", "message": str(e)})
+        finally:
+            cleanup_job(job_id)
 
     return Response(
         stream_with_context(generate()),
@@ -743,22 +783,28 @@ def run_workflow():
 def continue_workflow():
     """
     human_needed 後のユーザー選択を処理するエンドポイント。
-    action = "repeat"  → さらに4回の評価・修正ループを実行
+    action = "repeat"  → さらに5回の評価・修正ループを実行
     action = "manual"  → ユーザーの修正指示を AI に渡して台本を修正 → 評価 → ループ
     """
     data = request.get_json()
-    action           = data.get("action", "repeat")          # "repeat" | "manual"
-    script           = data.get("script", "")
+    action            = data.get("action", "repeat")
+    script            = data.get("script", "")
     user_instructions = data.get("user_instructions", "").strip()
 
     if not script:
         return {"error": "台本データがありません"}, 400
 
+    job_id, stop_event = new_job()
+
     def generate():
         nonlocal script
         try:
+            yield sse({"type": "job_id", "job_id": job_id})
+
             if action == "manual":
-                # ── ユーザーの修正指示で台本を改訂 ──
+                if stop_event.is_set():
+                    yield sse({"type": "stopped", "message": "処理を停止しました。", "final_script": script})
+                    return
                 yield sse({"type": "step", "step": 4, "label": "手動修正",
                            "message": "ご指摘を元に台本を修正しています..."})
 
@@ -770,7 +816,6 @@ def continue_workflow():
                 yield sse({"type": "message", "role": "user",
                            "label": "手動修正プロンプト", "content": manual_prompt})
 
-                # 台本をシステムプロンプトで渡し、修正指示のみ user として投げる
                 script = call_claude(
                     [{"role": "user", "content": manual_prompt}],
                     system=f"以下の台本が修正の対象です。\n\n{script}",
@@ -778,15 +823,15 @@ def continue_workflow():
                 yield sse({"type": "message", "role": "assistant",
                            "label": "手動修正済み台本", "content": script})
 
-                # 手動修正済み台本で評価・修正ループへ
-                yield from eval_revise_loop(script, context_label="（手動修正後）")
+                yield from eval_revise_loop(script, context_label="（手動修正後）", stop_event=stop_event)
 
             else:
-                # ── さらに5回繰り返す ──
-                yield from eval_revise_loop(script, context_label="（継続）")
+                yield from eval_revise_loop(script, context_label="（継続）", stop_event=stop_event)
 
         except Exception as e:
             yield sse({"type": "error", "message": str(e)})
+        finally:
+            cleanup_job(job_id)
 
     return Response(
         stream_with_context(generate()),

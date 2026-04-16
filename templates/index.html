@@ -281,6 +281,21 @@
     #run-btn:hover:not(:disabled) { background: #1d4ed8; }
     #run-btn:disabled { opacity: 0.45; cursor: not-allowed; }
 
+    #stop-btn {
+      display: none;
+      background: #dc2626; color: #fff;
+      border: none; border-radius: 10px;
+      padding: 12px 20px; font-size: 14px; font-weight: 600;
+      cursor: pointer; transition: background 0.15s;
+      white-space: nowrap; align-items: center; gap: 6px;
+    }
+    #stop-btn:hover { background: #b91c1c; }
+    #stop-btn.visible { display: flex; }
+
+    .error-link {
+      color: #93c5fd; text-decoration: underline;
+    }
+
     ::-webkit-scrollbar { width: 5px; }
     ::-webkit-scrollbar-track { background: transparent; }
     ::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
@@ -320,21 +335,24 @@
     <span class="row-label">行番号</span>
     <input type="number" id="row-input" min="1" placeholder="例: 2" />
     <span class="row-hint">スプレッドシートの何行目を使いますか？</span>
+    <button id="stop-btn" onclick="stopWorkflow()">⏹ 停止</button>
     <button id="run-btn" onclick="startWorkflow()">開始</button>
   </div>
 </main>
 
 <script>
-  const chat          = document.getElementById("chat");
+  const chat            = document.getElementById("chat");
   const typingIndicator = document.getElementById("typing-indicator");
-  const rowInput      = document.getElementById("row-input");
-  const runBtn        = document.getElementById("run-btn");
-  const scoreBar      = document.getElementById("score-bar");
-  const scoreFill     = document.getElementById("score-fill");
-  const scoreNum      = document.getElementById("score-num");
+  const rowInput        = document.getElementById("row-input");
+  const runBtn          = document.getElementById("run-btn");
+  const stopBtn         = document.getElementById("stop-btn");
+  const scoreBar        = document.getElementById("score-bar");
+  const scoreFill       = document.getElementById("score-fill");
+  const scoreNum        = document.getElementById("score-num");
 
   let currentStep   = null;
-  let currentScript = "";   // human_needed / complete 時に最新台本を保持
+  let currentScript = "";
+  let currentJobId  = null;   // 実行中ジョブID（停止ボタン用）
 
   rowInput.addEventListener("keydown", e => { if (e.key === "Enter") startWorkflow(); });
 
@@ -465,6 +483,29 @@
   function scrollBottom() { chat.scrollTop = chat.scrollHeight; }
   function clearChat()    { chat.innerHTML = ""; chat.appendChild(typingIndicator); }
 
+  function setRunning(running) {
+    runBtn.disabled = running;
+    if (running) {
+      stopBtn.classList.add("visible");
+    } else {
+      stopBtn.classList.remove("visible");
+      currentJobId = null;
+    }
+  }
+
+  async function stopWorkflow() {
+    if (!currentJobId) return;
+    stopBtn.disabled = true;
+    stopBtn.textContent = "停止中...";
+    try {
+      await fetch("/api/stop", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ job_id: currentJobId }),
+      });
+    } catch(e) {}
+  }
+
   /* ────────── アクションパネル（human_needed 時）────────── */
 
   function addActionPanel(score, message) {
@@ -564,8 +605,29 @@
 
   /* ────────── SSE 共通処理 ────────── */
 
+  function addErrorBanner(message) {
+    hideTyping();
+    const el = document.createElement("div");
+    el.className = "complete-banner fail";
+    // billing URLをリンクに変換
+    const billingUrl = "https://platform.claude.com/settings/billing";
+    if (message.includes(billingUrl)) {
+      const parts = message.split(billingUrl);
+      el.innerHTML = parts[0].replace(/\n/g, "<br>")
+        + `<a class="error-link" href="${billingUrl}" target="_blank">${billingUrl}</a>`
+        + parts[1].replace(/\n/g, "<br>");
+    } else {
+      el.textContent = message;
+    }
+    chat.appendChild(el);
+    scrollBottom();
+  }
+
   function handleSSEEvent(ev) {
-    if (ev.type === "step") {
+    if (ev.type === "job_id") {
+      currentJobId = ev.job_id;
+
+    } else if (ev.type === "step") {
       if (currentStep) removeSpinner(currentStep);
       currentStep = addStep(ev.label, ev.message);
 
@@ -577,30 +639,38 @@
       updateScore(ev.score);
 
     } else if (ev.type === "complete") {
-      // 75点達成 → バナー表示後に自動で訴求挿入へ
       if (currentStep) { removeSpinner(currentStep); currentStep = null; }
       currentScript = ev.final_script;
       addBanner("success", ev.message + "\n\n訴求の挿入を開始しています...");
-      // runBtn は appeal_complete まで disabled のまま
       callAppeal(ev.final_script);
 
     } else if (ev.type === "appeal_complete") {
       if (currentStep) { removeSpinner(currentStep); currentStep = null; }
       hideTyping();
       addBanner("appeal-success", ev.message);
-      runBtn.disabled = false;
+      setRunning(false);
 
     } else if (ev.type === "human_needed") {
       if (currentStep) { removeSpinner(currentStep); currentStep = null; }
       currentScript = ev.final_script;
       addActionPanel(ev.score, ev.message);
-      runBtn.disabled = false;
+      setRunning(false);
+
+    } else if (ev.type === "stopped") {
+      if (currentStep) { removeSpinner(currentStep); currentStep = null; }
+      hideTyping();
+      if (ev.final_script) currentScript = ev.final_script;
+      addBanner("fail", "⏹ 処理を停止しました。");
+      stopBtn.disabled = false;
+      stopBtn.innerHTML = "⏹ 停止";
+      setRunning(false);
 
     } else if (ev.type === "error") {
       if (currentStep) { removeSpinner(currentStep); currentStep = null; }
-      hideTyping();
-      addBanner("fail", "エラー: " + ev.message);
-      runBtn.disabled = false;
+      addErrorBanner("エラー: " + ev.message);
+      stopBtn.disabled = false;
+      stopBtn.innerHTML = "⏹ 停止";
+      setRunning(false);
     }
   }
 
@@ -639,10 +709,13 @@
     clearChat();
     currentScript = "";
     currentStep   = null;
-    runBtn.disabled = true;
+    currentJobId  = null;
+    setRunning(true);
     scoreBar.classList.remove("visible");
     scoreFill.style.width = "0%";
     scoreFill.classList.remove("pass");
+    stopBtn.disabled = false;
+    stopBtn.innerHTML = "⏹ 停止";
 
     const resp = await fetch("/api/workflow", {
       method: "POST",
@@ -650,11 +723,15 @@
       body: JSON.stringify({ row_number: rowNum }),
     });
     await readSSEStream(resp);
+    setRunning(false);
   }
 
   async function callContinue(action, script, userInstructions) {
-    currentStep   = null;
-    runBtn.disabled = true;
+    currentStep  = null;
+    currentJobId = null;
+    setRunning(true);
+    stopBtn.disabled = false;
+    stopBtn.innerHTML = "⏹ 停止";
 
     const resp = await fetch("/api/continue", {
       method: "POST",
@@ -662,11 +739,13 @@
       body: JSON.stringify({ action, script, user_instructions: userInstructions }),
     });
     await readSSEStream(resp);
+    setRunning(false);
   }
 
   async function callAppeal(script) {
-    currentStep = null;
-    runBtn.disabled = true;
+    currentStep  = null;
+    currentJobId = null;
+    setRunning(true);
 
     const resp = await fetch("/api/appeal", {
       method: "POST",
@@ -674,6 +753,7 @@
       body: JSON.stringify({ script }),
     });
     await readSSEStream(resp);
+    setRunning(false);
   }
 </script>
 </body>
