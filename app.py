@@ -415,48 +415,56 @@ def extract_video_id(url: str) -> str:
 
 
 def get_youtube_transcript(url: str) -> str:
-    """YouTube動画の文字起こしを取得する（日本語優先、なければ何でも）
-    youtube-transcript-api v0.6.0+ の新APIに対応。
-    言語コード指定方式ではなく list() で一覧取得してから選ぶ方式を使う。
-    クラウド環境での自動生成字幕取得失敗を回避できる。
+    """YouTube動画の文字起こしを取得する。
+    TRANSCRIPT_API_URL が設定されていれば外部APIを使用（クラウドIPブロック回避）。
+    なければ youtube-transcript-api で直接取得（ローカル環境向け）。
     """
+    video_id = extract_video_id(url)
+
+    # ── 方法①: 外部文字起こしAPI（TRANSCRIPT_API_URL が設定されている場合）──
+    transcript_api_url = os.getenv("TRANSCRIPT_API_URL")
+    if transcript_api_url:
+        api_endpoint = transcript_api_url.rstrip("/") + "/transcript"
+        try:
+            resp = requests.get(api_endpoint, params={"video_id": video_id}, timeout=30)
+            data = resp.json()
+            if resp.status_code == 200 and "transcript" in data:
+                return data["transcript"]
+            raise ValueError(data.get("error", f"API error: HTTP {resp.status_code}"))
+        except requests.RequestException as e:
+            raise ValueError(f"文字起こしAPI接続失敗: {e}")
+
+    # ── 方法②: ローカル直接取得（TRANSCRIPT_API_URL 未設定時）──
     try:
         from youtube_transcript_api import YouTubeTranscriptApi
     except ImportError:
-        raise ImportError("youtube-transcript-api がインストールされていません。pip install youtube-transcript-api を実行してください。")
+        raise ImportError("youtube-transcript-api がインストールされていません。")
 
-    video_id = extract_video_id(url)
     api = YouTubeTranscriptApi()
+    last_error = None
 
-    # ── 方法①: list() で一覧を取得して日本語優先で選ぶ ──
     try:
         transcript_list = api.list(video_id)
-        ja_transcript  = None
-        any_transcript = None
+        target = None
         for t in transcript_list:
-            if any_transcript is None:
-                any_transcript = t
-            if t.language_code.lower().startswith("ja") and ja_transcript is None:
-                ja_transcript = t
-        target = ja_transcript or any_transcript
+            if t.language_code.lower().startswith("ja"):
+                target = t
+                break
+        target = target or next(iter(transcript_list), None)
         if target:
             fetched = target.fetch()
             return "\n".join(seg.text for seg in fetched)
     except Exception as e:
-        list_error = f"[list方式] {type(e).__name__}: {e}"
-    else:
-        list_error = "[list方式] 字幕が1件も見つかりませんでした"
+        last_error = e
 
-    # ── 方法②: fetch() 直接呼び出し（フォールバック）──
-    last_error = list_error
     for langs in (["ja", "ja-JP"], ["en"], None):
         try:
             fetched = api.fetch(video_id, languages=langs) if langs else api.fetch(video_id)
             return "\n".join(seg.text for seg in fetched)
         except Exception as e:
-            last_error = f"[fetch{langs}] {type(e).__name__}: {e}"
+            last_error = e
 
-    raise ValueError(f"文字起こし取得失敗（全方式失敗）: {last_error} | 動画: {url}")
+    raise ValueError(f"文字起こし取得失敗: {last_error}")
 
 
 def get_sheet_row(row_number: int) -> dict:
