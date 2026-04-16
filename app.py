@@ -459,12 +459,13 @@ def get_sheet_row(row_number: int) -> dict:
 
     row = rows[row_number - 1]   # 1-indexed → 0-indexed
 
-    # 列は 0-indexed: H=7, I=8（YouTube URL）, K=10（サムネイメージ）
+    # 列は 0-indexed: H=7, I=8（YouTube URL）, J=9（文字起こし）, K=10（サムネイメージ）
     kikaku_ito   = row[7].strip()  if len(row) > 7  else ""
     youtube_raw  = row[8].strip()  if len(row) > 8  else ""
+    transcripts  = row[9].strip()  if len(row) > 9  else ""  # J列: ローカルスクリプトが書き込んだ文字起こし
     samune_image = row[10].strip() if len(row) > 10 else ""  # K列: サムネイメージ
 
-    # I列から YouTube URL を抽出（複数 URL / 改行・カンマ区切りに対応）
+    # I列から YouTube URL を抽出（表示用）
     youtube_urls = re.findall(
         r'https?://(?:www\.)?(?:youtube\.com/\S+|youtu\.be/\S+)', youtube_raw
     )
@@ -472,6 +473,7 @@ def get_sheet_row(row_number: int) -> dict:
     return {
         "kikaku_ito":   kikaku_ito,
         "youtube_urls": youtube_urls,
+        "transcripts":  transcripts,
         "samune_image": samune_image,
     }
 
@@ -672,27 +674,22 @@ def run_workflow():
                        "content": row["samune_image"] or "（空欄）"})
 
             # ────────────────────────────────────────────
-            # Step 0-b: I列のYouTube URLから文字起こし取得
+            # Step 0-b: J列から文字起こしを読み込む
             # ────────────────────────────────────────────
-            transcripts = []
+            if not row["transcripts"]:
+                yield sse({"type": "error",
+                           "message": (
+                               f"J列（文字起こし）が空です。\n"
+                               f"ローカルの fetch_transcripts.bat を実行して\n"
+                               f"{row_number}行目の文字起こしをJ列に書き込んでから、再度お試しください。"
+                           )})
+                return
 
-            for url in row["youtube_urls"]:
-                yield sse({"type": "step", "step": 0, "label": "文字起こし取得",
-                           "message": f"YouTube文字起こしを取得しています...\n{url}"})
-                try:
-                    transcript = get_youtube_transcript(url)
-                    transcripts.append(f"【{url}】\n{transcript}")
-                    yield sse({"type": "message", "role": "assistant",
-                               "label": f"文字起こし：{url}",
-                               "content": transcript})
-                except Exception as e:
-                    err_msg = f"⚠️ 文字起こしを取得できませんでした。\n詳細: {e}"
-                    transcripts.append(f"【{url}】\n（文字起こし取得失敗のため省略）")
-                    yield sse({"type": "message", "role": "assistant",
-                               "label": f"文字起こし取得エラー：{url}",
-                               "content": err_msg})
+            yield sse({"type": "message", "role": "assistant",
+                       "label": f"文字起こし（J列・{row_number}行目）",
+                       "content": row["transcripts"]})
 
-            combined_transcripts = "\n\n" + "=" * 40 + "\n\n".join(transcripts) if transcripts else "（文字起こしデータなし）"
+            combined_transcripts = row["transcripts"]
 
             # ────────────────────────────────────────────
             # Step 1: 設計書プロンプト組み立て → 設計書生成
