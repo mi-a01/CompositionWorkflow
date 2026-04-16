@@ -420,45 +420,19 @@ def get_youtube_transcript(url: str) -> str:
     if transcript_api_url:
         api_endpoint = transcript_api_url.rstrip("/") + "/transcript"
         try:
-            resp = requests.get(api_endpoint, params={"video_id": video_id}, timeout=30)
+            resp = requests.get(api_endpoint, params={"video_id": video_id}, timeout=60)
             data = resp.json()
             if resp.status_code == 200 and "transcript" in data:
                 return data["transcript"]
             raise ValueError(data.get("error", f"API error: HTTP {resp.status_code}"))
-        except requests.RequestException as e:
-            raise ValueError(f"文字起こしAPI接続失敗: {e}")
+        except Exception as e:
+            raise ValueError(f"文字起こしAPI接続失敗 [{api_endpoint}]: {type(e).__name__}: {e}")
 
     # ── 方法②: ローカル直接取得（TRANSCRIPT_API_URL 未設定時）──
-    try:
-        from youtube_transcript_api import YouTubeTranscriptApi
-    except ImportError:
-        raise ImportError("youtube-transcript-api がインストールされていません。")
-
-    api = YouTubeTranscriptApi()
-    last_error = None
-
-    try:
-        transcript_list = api.list(video_id)
-        target = None
-        for t in transcript_list:
-            if t.language_code.lower().startswith("ja"):
-                target = t
-                break
-        target = target or next(iter(transcript_list), None)
-        if target:
-            fetched = target.fetch()
-            return "\n".join(seg.text for seg in fetched)
-    except Exception as e:
-        last_error = e
-
-    for langs in (["ja", "ja-JP"], ["en"], None):
-        try:
-            fetched = api.fetch(video_id, languages=langs) if langs else api.fetch(video_id)
-            return "\n".join(seg.text for seg in fetched)
-        except Exception as e:
-            last_error = e
-
-    raise ValueError(f"文字起こし取得失敗: {last_error}")
+    raise ValueError(
+        "TRANSCRIPT_API_URL が設定されていません。"
+        "Renderの環境変数に TRANSCRIPT_API_URL を追加してください。"
+    )
 
 
 def get_sheet_row(row_number: int) -> dict:
