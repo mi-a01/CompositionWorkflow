@@ -543,11 +543,9 @@ def call_claude(messages: list, system: str = None) -> str:
     try:
         response = client.messages.create(**kwargs)
         return response.content[0].text
-    except anthropic.BadRequestError as e:
-        raise
     except Exception as e:
         err_str = str(e)
-        if "credit" in err_str.lower() or "billing" in err_str.lower() or "balance" in err_str.lower() or "402" in err_str:
+        if "credit" in err_str.lower() or "billing" in err_str.lower() or "balance" in err_str.lower():
             raise RuntimeError(
                 "クレジット残高が不足しています。\n"
                 "以下のURLから残高を確認・チャージしてください：\n"
