@@ -5,6 +5,7 @@ import json
 import re
 import uuid
 import threading
+import queue as _queue
 import requests
 from flask import Flask, render_template, request, Response, stream_with_context
 import anthropic
@@ -554,6 +555,31 @@ def call_claude(messages: list, system: str = None) -> str:
         raise
 
 
+def call_claude_yielding(messages: list, system: str = None):
+    """Claude API をバックグラウンドスレッドで呼び出すジェネレータ。
+    待機中は20秒ごとに SSE ハートビートコメントを yield してRenderの
+    プロキシタイムアウトを防ぐ。最後に result = yield from で結果を受け取る。
+    """
+    q = _queue.Queue()
+
+    def _worker():
+        try:
+            q.put(("ok", call_claude(messages, system)))
+        except Exception as e:
+            q.put(("err", e))
+
+    threading.Thread(target=_worker, daemon=True).start()
+
+    while True:
+        try:
+            tag, val = q.get(timeout=20)
+            if tag == "err":
+                raise val
+            return val          # StopIteration の値として yield from 呼び出し元に返す
+        except _queue.Empty:
+            yield ": heartbeat\n\n"   # SSE コメント行 — ブラウザは無視、接続は維持
+
+
 def send_chatwork(message: str) -> None:
     """Chatwork の指定ルームへ通知を送る（失敗してもワークフローは止めない）"""
     try:
@@ -600,7 +626,7 @@ def eval_revise_loop(script: str, context_label: str = "", stop_event: threading
         yield sse({"type": "message", "role": "user",
                    "label": f"評価プロンプト（自動・{label_e}）", "content": EVALUATION_PROMPT})
 
-        evaluation = call_claude(
+        evaluation = yield from call_claude_yielding(
             [{"role": "user", "content": EVALUATION_PROMPT}],
             system=f"以下の台本が評価・修正の対象です。\n\n{script}",
         )
@@ -651,7 +677,7 @@ def eval_revise_loop(script: str, context_label: str = "", stop_event: threading
             {"role": "assistant", "content": evaluation},
             {"role": "user",      "content": REVISION_PROMPT},
         ]
-        script = call_claude(
+        script = yield from call_claude_yielding(
             revision_messages,
             system=f"以下の台本が評価・修正の対象です。\n\n{script}",
         )
@@ -742,7 +768,7 @@ def run_workflow():
                        "label": "設計書プロンプト（自動生成）",
                        "content": design_prompt})
 
-            design_doc = call_claude([{"role": "user", "content": design_prompt}])
+            design_doc = yield from call_claude_yielding([{"role": "user", "content": design_prompt}])
             yield sse({"type": "message", "role": "assistant",
                        "label": "設計書", "content": design_doc})
 
@@ -756,7 +782,7 @@ def run_workflow():
             yield sse({"type": "message", "role": "user",
                        "label": "台本作成プロンプト（自動）", "content": script_prompt})
 
-            script = call_claude([{"role": "user", "content": script_prompt}])
+            script = yield from call_claude_yielding([{"role": "user", "content": script_prompt}])
             yield sse({"type": "message", "role": "assistant",
                        "label": "台本 初版", "content": script})
 
@@ -814,7 +840,7 @@ def continue_workflow():
                 yield sse({"type": "message", "role": "user",
                            "label": "手動修正プロンプト", "content": manual_prompt})
 
-                script = call_claude(
+                script = yield from call_claude_yielding(
                     [{"role": "user", "content": manual_prompt}],
                     system=f"以下の台本が修正の対象です。\n\n{script}",
                 )
@@ -861,7 +887,7 @@ def insert_appeal():
             yield sse({"type": "message", "role": "user",
                        "label": "訴求挿入プロンプト（自動）", "content": prompt})
 
-            result = call_claude([{"role": "user", "content": prompt}])
+            result = yield from call_claude_yielding([{"role": "user", "content": prompt}])
             yield sse({"type": "message", "role": "assistant",
                        "label": "✅ 訴求入り完成台本", "content": result})
 
