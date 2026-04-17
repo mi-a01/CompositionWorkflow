@@ -535,14 +535,15 @@ def extract_score(text: str) -> int:
 
 
 def call_claude(messages: list, system: str = None) -> str:
-    """Claude API を呼び出してテキストを返す。
+    """Claude API をストリーミングで呼び出してテキストを返す。
+    チャンク単位で受信するため、大きなレスポンスでもメモリを節約できる。
     system を渡すと台本などのコンテキストをシステムプロンプトで渡せる。"""
     kwargs = dict(model=MODEL, max_tokens=8192, messages=messages)
     if system:
         kwargs["system"] = system
     try:
-        response = client.messages.create(**kwargs)
-        return response.content[0].text
+        with client.messages.stream(**kwargs) as stream:
+            return stream.get_final_text()
     except Exception as e:
         err_str = str(e)
         if "credit" in err_str.lower() or "billing" in err_str.lower() or "balance" in err_str.lower():
